@@ -37,6 +37,14 @@ $routes->get('users', 'UserController::index');
 $routes->get('users/(:num)', 'UserController::show/$1');
 $routes->delete('users/(:num)', 'UserController::delete/$1');
 
+// Single User Routes (table: user)
+$routes->get('single-users', 'SingleUserController::index');
+$routes->get('single-users/(:num)', 'SingleUserController::show/$1');
+$routes->post('single-users', 'SingleUserController::create');
+$routes->post('single-users/login', 'SingleUserController::login');
+$routes->put('single-users/(:num)', 'SingleUserController::update/$1');
+$routes->delete('single-users/(:num)', 'SingleUserController::delete/$1');
+
 $routes->get('books', 'BooksController::index');
 $routes->get('books/(:num)', 'BooksController::show/$1');
 $routes->post('books', 'BooksController::create');
