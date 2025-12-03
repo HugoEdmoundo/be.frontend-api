@@ -15,28 +15,32 @@ class PeminjamanController extends ResourceController
         try {
             $db = \Config\Database::connect();
             
-            // Query untuk get semua peminjaman dengan nama user
+            // Query yang diperbaiki - tanpa ORDER BY created_at jika kolom tidak ada
             $query = $db->query("
                 SELECT 
                     p.*,
                     u.name as anggota_nama,
                     u.email as anggota_email
                 FROM peminjaman p
-                LEFT JOIN users u ON p.user_id = u.id
-                ORDER BY p.created_at DESC
+                LEFT JOIN users u ON p.users_id = u.id
+                ORDER BY p.id DESC  -- Ganti dengan ORDER BY id atau hapus jika tidak perlu
             ");
             
             $peminjaman = $query->getResultArray();
+            
+            // Debug: lihat struktur data yang diambil
+            // log_message('debug', 'Peminjaman data: ' . json_encode($peminjaman));
             
             // Get detail untuk setiap peminjaman
             foreach ($peminjaman as &$item) {
                 $detailQuery = $db->query("
                     SELECT 
                         d.*,
-                        b.judul,
-                        b.penulis
+                        b.title as judul_buku,
+                        b.author as penulis_buku,
+                        b.quantity as stok_buku
                     FROM detail_peminjaman d
-                    LEFT JOIN books b ON d.buku_id = b.id
+                    LEFT JOIN books b ON d.books_id = b.id
                     WHERE d.peminjaman_id = ?
                 ", [$item['id']]);
                 
@@ -50,71 +54,78 @@ class PeminjamanController extends ResourceController
             ]);
             
         } catch (\Exception $e) {
+            // Log error dengan detail
+            log_message('error', 'Error in PeminjamanController::index: ' . $e->getMessage());
+            log_message('error', 'Error trace: ' . $e->getTraceAsString());
+            
             return $this->respond([
                 'status' => 'error',
-                'message' => 'Gagal mengambil data peminjaman: ' . $e->getMessage()
+                'message' => 'Gagal mengambil data peminjaman: ' . $e->getMessage(),
+                'error_detail' => $e->getMessage()
             ], 500);
         }
     }
-
     // GET /peminjaman/{id} - Get single peminjaman
     public function show($id = null)
-    {
-        try {
-            $db = \Config\Database::connect();
-            
-            // Query untuk get peminjaman by ID
-            $query = $db->query("
-                SELECT 
-                    p.*,
-                    u.name as anggota_nama,
-                    u.email as anggota_email
-                FROM peminjaman p
-                LEFT JOIN users u ON p.user_id = u.id
-                WHERE p.id = ?
-            ", [$id]);
-            
-            $peminjaman = $query->getRowArray();
-            
-            if (!$peminjaman) {
-                return $this->respond([
-                    'status' => 'error',
-                    'message' => 'Peminjaman tidak ditemukan'
-                ], 404);
-            }
-            
-            // Get detail buku
-            $detailQuery = $db->query("
-                SELECT 
-                    d.*,
-                    b.judul,
-                    b.penulis,
-                    b.stok as buku_stok
-                FROM detail_peminjaman d
-                LEFT JOIN books b ON d.buku_id = b.id
-                WHERE d.peminjaman_id = ?
-            ", [$id]);
-            
-            $peminjaman['detail_buku'] = $detailQuery->getResultArray();
-            
-            return $this->respond([
-                'status' => 'success',
-                'data' => $peminjaman
-            ]);
-            
-        } catch (\Exception $e) {
+{
+    try {
+        $db = \Config\Database::connect();
+        
+        // Query untuk get peminjaman by ID
+        $query = $db->query("
+            SELECT 
+                p.*,
+                u.name as anggota_nama,
+                u.email as anggota_email
+            FROM peminjaman p
+            LEFT JOIN users u ON p.users_id = u.id
+            WHERE p.id = ?
+        ", [$id]);
+        
+        $peminjaman = $query->getRowArray();
+        
+        if (!$peminjaman) {
             return $this->respond([
                 'status' => 'error',
-                'message' => 'Error: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Peminjaman tidak ditemukan'
+            ], 404);
         }
+        
+        // Get detail buku
+        $detailQuery = $db->query("
+            SELECT 
+                d.*,
+                b.title as judul,
+                b.author as penulis,
+                b.quantity as stok_buku
+            FROM detail_peminjaman d
+            LEFT JOIN books b ON d.books_id = b.id
+            WHERE d.peminjaman_id = ?
+        ", [$id]);
+        
+        $peminjaman['detail_buku'] = $detailQuery->getResultArray();
+        
+        return $this->respond([
+            'status' => 'success',
+            'data' => $peminjaman
+        ]);
+        
+    } catch (\Exception $e) {
+        return $this->respond([
+            'status' => 'error',
+            'message' => 'Error: ' . $e->getMessage()
+        ], 500);
     }
-
+}
     // POST /peminjaman - Create new peminjaman
     public function create()
     {
         try {
+            // Ambil data dari request
             $json = $this->request->getJSON();
+            
+            // Debug: log data yang diterima
+            log_message('debug', 'Received data for peminjaman: ' . json_encode($json));
             
             if (!$json) {
                 return $this->respond([
@@ -126,72 +137,114 @@ class PeminjamanController extends ResourceController
             $db = \Config\Database::connect();
             $db->transBegin();
 
+            // Debug: cek apakah data lengkap
+            log_message('debug', 'users_id: ' . ($json->users_id ?? 'not set'));
+            log_message('debug', 'buku count: ' . (is_array($json->buku) ? count($json->buku) : 'not array'));
+
             // Validasi data
-            if (empty($json->user_id)) {
+            if (empty($json->users_id) && empty($json->user_id)) {
                 return $this->respond([
                     'status' => 'error',
-                    'message' => 'User ID wajib diisi'
+                    'message' => 'User ID wajib diisi',
+                    'received_data' => $json // Untuk debugging
                 ], 400);
             }
 
-            if (empty($json->buku) || !is_array($json->buku)) {
+            
+            $userId = $json->users_id ?? $json->user_id ?? null;
+
+            $userQuery = $db->query("SELECT id, name FROM users WHERE id = ?", [$userId]);
+            $user = $userQuery->getRowArray();
+            
+            if (!$user) {
                 return $this->respond([
                     'status' => 'error',
-                    'message' => 'Pilih minimal 1 buku'
+                    'message' => 'User dengan ID ' . $userId . ' tidak ditemukan'
+                ], 404);
+            }
+
+            // Validasi data buku
+            if (empty($json->buku) || !is_array($json->buku) || count($json->buku) === 0) {
+                return $this->respond([
+                    'status' => 'error',
+                    'message' => 'Pilih minimal 1 buku. Data buku: ' . json_encode($json->buku)
                 ], 400);
+            }
+
+            // Validasi setiap buku
+            foreach ($json->buku as $index => $buku) {
+                if (empty($buku->buku_id)) {
+                    return $this->respond([
+                        'status' => 'error',
+                        'message' => 'Buku ke-' . ($index + 1) . ' tidak memiliki ID'
+                    ], 400);
+                }
+                
+                if (empty($buku->jumlah) || $buku->jumlah <= 0) {
+                    return $this->respond([
+                        'status' => 'error',
+                        'message' => 'Jumlah buku ke-' . ($index + 1) . ' harus lebih dari 0'
+                    ], 400);
+                }
             }
 
             // Set tanggal
             $tanggal_pinjam = $json->tanggal_pinjam ?? date('Y-m-d');
             $tanggal_kembali = $json->tanggal_kembali ?? date('Y-m-d', strtotime('+7 days'));
 
-            // Insert peminjaman
+            // Insert peminjaman - gunakan field yang sesuai dengan database
             $db->query("
-                INSERT INTO peminjaman (user_id, tanggal_pinjam, tanggal_kembali, status) 
+                INSERT INTO peminjaman (users_id, tanggal_pinjam, tanggal_kembali, status) 
                 VALUES (?, ?, ?, 'dipinjam')
-            ", [$json->user_id, $tanggal_pinjam, $tanggal_kembali]);
+            ", [$userId, $tanggal_pinjam, $tanggal_kembali]);
             
             $peminjaman_id = $db->insertID();
+            
+            log_message('debug', 'Created peminjaman ID: ' . $peminjaman_id);
 
             // Insert detail dan update stok
             foreach ($json->buku as $buku) {
-                if (empty($buku->buku_id) || empty($buku->jumlah) || $buku->jumlah <= 0) {
-                    continue;
-                }
+                $bukuId = $buku->buku_id;
+                $jumlah = $buku->jumlah;
 
-                // Cek stok tersedia
-                $stockQuery = $db->query("
-                    SELECT stok FROM books WHERE id = ?
-                ", [$buku->buku_id]);
-                
-                $book = $stockQuery->getRowArray();
+                // Cek apakah buku exists
+                $bookQuery = $db->query("SELECT id, title, quantity FROM books WHERE id = ?", [$bukuId]);
+                $book = $bookQuery->getRowArray();
                 
                 if (!$book) {
                     $db->transRollback();
                     return $this->respond([
                         'status' => 'error',
-                        'message' => 'Buku dengan ID ' . $buku->buku_id . ' tidak ditemukan'
+                        'message' => 'Buku dengan ID ' . $bukuId . ' tidak ditemukan'
                     ], 404);
                 }
 
-                if ($book['stok'] < $buku->jumlah) {
+                // Cek stok tersedia
+                if ($book['quantity'] < $jumlah) {
                     $db->transRollback();
                     return $this->respond([
                         'status' => 'error',
-                        'message' => 'Stok tidak cukup untuk buku ID ' . $buku->buku_id
+                        'message' => 'Stok tidak cukup untuk buku "' . $book['title'] . '". 
+                                    Stok tersedia: ' . $book['quantity'] . ', Diminta: ' . $jumlah
                     ], 400);
                 }
 
-                // Insert detail
-                $db->query("
-                    INSERT INTO detail_peminjaman (peminjaman_id, buku_id, jumlah) 
-                    VALUES (?, ?, ?)
-                ", [$peminjaman_id, $buku->buku_id, $buku->jumlah]);
+                log_message('debug', 'Processing book ID ' . $bukuId . ', quantity: ' . $jumlah);
 
-                // Update stok
+                // Insert detail peminjaman
                 $db->query("
-                    UPDATE books SET stok = stok - ? WHERE id = ?
-                ", [$buku->jumlah, $buku->buku_id]);
+                    INSERT INTO detail_peminjaman (peminjaman_id, books_id, jumlah) 
+                    VALUES (?, ?, ?)
+                ", [$peminjaman_id, $bukuId, $jumlah]);
+
+                // Update stok buku
+                $db->query("
+                    UPDATE books 
+                    SET quantity = quantity - ? 
+                    WHERE id = ?
+                ", [$jumlah, $bukuId]);
+                
+                log_message('debug', 'Updated stock for book ID ' . $bukuId . ', reduced by ' . $jumlah);
             }
 
             $db->transCommit();
@@ -201,12 +254,16 @@ class PeminjamanController extends ResourceController
 
             return $this->respond([
                 'status' => 'success',
-                'message' => 'Peminjaman berhasil dibuat',
-                'data' => $newPeminjaman
+                'message' => 'Peminjaman berhasil dibuat untuk ' . $user['name'],
+                'data' => $newPeminjaman,
+                'peminjaman_id' => $peminjaman_id
             ], 201);
 
         } catch (\Exception $e) {
             $db->transRollback();
+            log_message('error', 'Error creating peminjaman: ' . $e->getMessage());
+            log_message('error', 'Stack trace: ' . $e->getTraceAsString());
+            
             return $this->respond([
                 'status' => 'error',
                 'message' => 'Gagal membuat peminjaman: ' . $e->getMessage()
@@ -235,7 +292,7 @@ class PeminjamanController extends ResourceController
             if ($peminjaman['status'] === 'dikembalikan') {
                 return $this->respond([
                     'status' => 'error',
-                    'message' => 'Buku sudah dikembalikan'
+                    'message' => 'Books sudah dikembalikan'
                 ], 400);
             }
 
@@ -274,7 +331,7 @@ class PeminjamanController extends ResourceController
                     UPDATE books 
                     SET stok = stok + ? 
                     WHERE id = ?
-                ", [$detail['jumlah'], $detail['buku_id']]);
+                ", [$detail['jumlah'], $detail['books_id']]);
             }
 
             $db->transCommit();
@@ -284,7 +341,7 @@ class PeminjamanController extends ResourceController
 
             return $this->respond([
                 'status' => 'success',
-                'message' => 'Buku berhasil dikembalikan',
+                'message' => 'Books berhasil dikembalikan',
                 'data' => $updatedPeminjaman
             ]);
 
@@ -292,7 +349,7 @@ class PeminjamanController extends ResourceController
             $db->transRollback();
             return $this->respond([
                 'status' => 'error',
-                'message' => 'Gagal mengembalikan buku: ' . $e->getMessage()
+                'message' => 'Gagal mengembalikan books: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -308,7 +365,7 @@ class PeminjamanController extends ResourceController
                 u.name as anggota_nama,
                 u.email as anggota_email
             FROM peminjaman p
-            LEFT JOIN users u ON p.user_id = u.id
+            LEFT JOIN users u ON p.users_id = u.id
             WHERE p.id = ?
         ", [$id]);
         
@@ -318,10 +375,11 @@ class PeminjamanController extends ResourceController
             $detailQuery = $db->query("
                 SELECT 
                     d.*,
-                    b.judul,
-                    b.penulis
+                    b.title as judul,
+                    b.author as penulis,
+                    b.quantity as stok_buku
                 FROM detail_peminjaman d
-                LEFT JOIN books b ON d.buku_id = b.id
+                LEFT JOIN books b ON d.books_id = b.id
                 WHERE d.peminjaman_id = ?
             ", [$id]);
             
@@ -330,6 +388,8 @@ class PeminjamanController extends ResourceController
         
         return $peminjaman;
     }
+
+    // Juga perbaiki method show(), kembalikan(), byUser(), dll
 
     // GET /peminjaman/user/{user_id} - Get peminjaman by user
     public function byUser($user_id = null)
@@ -355,9 +415,9 @@ class PeminjamanController extends ResourceController
                     u.name as anggota_nama,
                     u.email as anggota_email
                 FROM peminjaman p
-                LEFT JOIN users u ON p.user_id = u.id
-                WHERE p.user_id = ?
-                ORDER BY p.created_at DESC
+                LEFT JOIN users u ON p.users_id = u.id
+                WHERE p.users_id = ?
+                ORDER BY p.id DESC  // Ganti dengan field yang ada
             ", [$user_id]);
             
             $peminjaman = $query->getResultArray();
@@ -367,10 +427,11 @@ class PeminjamanController extends ResourceController
                 $detailQuery = $db->query("
                     SELECT 
                         d.*,
-                        b.judul,
-                        b.penulis
+                        b.title as judul,
+                        b.author as penulis,
+                        b.quantity as stok_buku
                     FROM detail_peminjaman d
-                    LEFT JOIN books b ON d.buku_id = b.id
+                    LEFT JOIN books b ON d.books_id = b.id
                     WHERE d.peminjaman_id = ?
                 ", [$item['id']]);
                 
@@ -407,11 +468,11 @@ class PeminjamanController extends ResourceController
                     SELECT COALESCE(SUM(d.jumlah), 0) as total_dipinjam
                     FROM detail_peminjaman d
                     JOIN peminjaman p ON d.peminjaman_id = p.id
-                    WHERE d.buku_id = ? AND p.status = 'dipinjam'
+                    WHERE d.books_id = ? AND p.status = 'dipinjam'
                 ", [$book['id']]);
                 
                 $borrowed = $borrowedQuery->getRowArray();
-                $book['tersedia'] = $book['stok'] - ($borrowed['total_dipinjam'] ?? 0);
+                $book['tersedia'] = $book['quantity'] - ($borrowed['total_dipinjam'] ?? 0);
             }
 
             return $this->respond([

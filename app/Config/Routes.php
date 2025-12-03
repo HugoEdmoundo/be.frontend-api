@@ -56,6 +56,12 @@ $routes->get('users/simple', 'UserController::getSimpleUsers');
 // Default route
 $routes->get('/', 'Home::index');
 
+// Untuk debugging
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] == 'POST') {
+    $input = file_get_contents('php://input');
+    log_message('debug', 'POST request to ' . $_SERVER['REQUEST_URI'] . ': ' . $input);
+}
+
 // 404 Override
 $routes->set404Override(function() {
     return service('response')->setJSON([
