@@ -87,4 +87,22 @@ class UserController extends ResourceController
             return $this->failServerError('Database error: ' . $e->getMessage());
         }
     }
+     
+    public function getSimpleUsers()
+    {
+        try {
+            $users = $this->model->select('id, name, email')->findAll();
+            
+            return $this->respond([
+                'status' => 'success',
+                'data' => $users,
+                'total' => count($users)
+            ]);
+        } catch (\Exception $e) {
+            return $this->respond([
+                'status' => 'error',
+                'message' => 'Failed to retrieve users: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

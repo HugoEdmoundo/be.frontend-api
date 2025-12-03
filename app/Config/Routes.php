@@ -43,6 +43,16 @@ $routes->post('books', 'BooksController::create');
 $routes->put('books/(:num)', 'BooksController::update/$1');
 $routes->delete('books/(:num)', 'BooksController::delete/$1');
 
+// Peminjaman Routes
+$routes->get('peminjaman', 'PeminjamanController::index');
+$routes->get('peminjaman/(:num)', 'PeminjamanController::show/$1');
+$routes->post('peminjaman', 'PeminjamanController::create');
+$routes->put('peminjaman/(:num)/kembalikan', 'PeminjamanController::kembalikan/$1');
+$routes->get('peminjaman/user/(:num)', 'PeminjamanController::byUser/$1');
+$routes->get('peminjaman/available-books', 'PeminjamanController::availableBooks');
+// Tambahkan di Routes.php
+$routes->get('users/simple', 'UserController::getSimpleUsers');
+
 // Default route
 $routes->get('/', 'Home::index');
 
